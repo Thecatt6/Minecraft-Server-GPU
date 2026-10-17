@@ -1,0 +1,27 @@
+{
+	"schemaVersion": 1,
+	"id": "serverwithgpu",
+	"version": "${version}",
+	"name": "Server With GPU",
+	"description": "Esegue su GPU alcuni compiti di calcolo del server (generazione del terreno, batch di calcoli) con fallback automatico su CPU. Disattivato di default: il comportamento vanilla non cambia finché non lo abiliti nel config.",
+	"authors": [
+		"Thecatt6"
+	],
+	"contact": {
+		"sources": "https://github.com/Thecatt6/Minecraft-Server-GPU"
+	},
+	"license": "CC0-1.0",
+	"icon": "assets/serverwithgpu/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.serverwithgpu.ServerWithGpu"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
