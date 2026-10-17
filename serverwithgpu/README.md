@@ -1,32 +1,42 @@
 # Server With GPU
 
-Mod Fabric per **Minecraft 26.3** (server e client), scritta a partire dal template ufficiale
-`fabric-example-mod` (branch `26.3`).
+Mod Fabric per **Minecraft 26.3** (server), che sposta alcuni calcoli batch del server sulla GPU
+via **OpenCL**, con fallback automatico su CPU.
 
-> Stato: **fondamenta del progetto**. Il backend CPU e la configurazione sono pronti;
-> il backend GPU non è ancora implementato. Vedi "Cosa funziona oggi".
+> Stato: **motore di calcolo GPU/CPU + primo set di kernel verificabile**. Gli hook nel gioco
+> vanilla (terreno, luce, minerali, pathfinding, random tick) NON sono ancora collegati: vedi
+> "Cosa manca".
 
 ## Requisiti
 
-| Componente   | Versione            |
-|--------------|---------------------|
-| Minecraft    | 26.3                |
-| Fabric Loader| 0.19.5 o superiore  |
-| Fabric API   | 0.163.0+26.3        |
-| Java         | 25                  |
-| Loom         | 1.18-SNAPSHOT (plugin `net.fabricmc.fabric-loom`, non-remapping) |
+| Componente    | Versione                                                       |
+|---------------|----------------------------------------------------------------|
+| Minecraft     | 26.3                                                           |
+| Fabric Loader | 0.19.5+                                                        |
+| Fabric API    | 0.163.0+26.3                                                   |
+| Java          | 25                                                             |
+| Loom          | 1.18-SNAPSHOT (`net.fabricmc.fabric-loom`, non-remapping)      |
+| JOCL          | 2.0.6 (binding OpenCL, incluso nel jar con `include`)          |
 
-Minecraft 26.1 e successivi non sono offuscati: non servono mappings (Yarn), si usa `implementation`
-invece di `modImplementation` e il jar finale è quello standard di `jar`.
+### GPU NVIDIA (es. MX130)
+
+- La MX130 è Maxwell (compute capability 5.0). **CUDA 13 non la supporta più**, quindi il mod usa
+  **OpenCL**, che i driver NVIDIA continuano a esporre. Installa un driver NVIDIA recente con OpenCL
+  (su Linux: il pacchetto `nvidia-driver-*` + `ocl-icd-libopencl1`).
+- Verifica con `clinfo` (Linux) o con il tool OpenCL del driver: deve comparire "GeForce MX130"
+  e l'estensione `cl_khr_fp64` (necessaria per risultati coerenti con la CPU).
+- La MX130 ha 2 GB di VRAM e 384 core: per batch piccoli la CPU può essere più veloce.
+  Il comando `/serverwithgpu benchmark` e `selftest` ti dicono la verità sulla tua macchina.
 
 ## Build
 
 ```bash
 cd serverwithgpu
-./gradlew build      # su Windows: gradlew.bat build
+./gradlew build        # Windows: gradlew.bat build
+./gradlew runServer    # avvia un server di test
 ```
 
-Il jar si trova in `build/libs/`. Per il test in locale: `./gradlew runServer` (o `runClient`).
+Il jar è in `build/libs/`.
 
 ## Configurazione
 
@@ -41,51 +51,56 @@ Al primo avvio viene creato `config/serverwithgpu.json`:
 }
 ```
 
-- `enabled`: interruttore generale. Con `false` il mod non modifica nessun calcolo del server.
-- `preferGpu`: usa la GPU se disponibile, altrimenti la CPU in automatico.
-- `benchmarkSize`, `terrainOctaves`: parametri del benchmark e dell'heightmap.
+- `enabled`: interruttore generale per gli hook vanilla (oggi non ancora collegati).
+- `preferGpu`: usa la GPU se disponibile, altrimenti la CPU.
 
-## Comandi
+## Comandi (livello gamemaster)
 
-- `/serverwithgpu status`: mostra backend attivo e stato di abilitazione.
-- `/serverwithgpu benchmark`: calcola un'heightmap di prova e mostra il tempo medio.
+- `/serverwithgpu status`: backend attivo.
+- `/serverwithgpu benchmark`: heightmap di prova, tempo medio.
+- `/serverwithgpu selftest`: confronta GPU e CPU su heightmap, esplosione (1352 raggi) ed entità,
+  con differenze massime e tempi. **Esegui questo comando per primo sulla tua macchina.**
 
-Richiedono permesso di livello gamemaster.
+## Kernel e algoritmi
+
+| Funzione            | CPU (riferimento)            | GPU (OpenCL)               | Stato      |
+|---------------------|------------------------------|----------------------------|------------|
+| Heightmap Perlin    | `CpuBackend.heightmap`       | kernel `heightmap`         | pronto     |
+| Raycast esplosione  | `CpuBackend.blast`           | kernel `blast`             | pronto     |
+| Integrazione entità | `CpuBackend.integrate`       | kernel `integrate`         | pronto     |
+| Illuminazione       | -                            | -                          | da fare    |
+| Pathfinding A*      | -                            | -                          | da fare    |
+| Minerali            | -                            | -                          | da fare    |
+| Random tick         | -                            | -                          | da fare    |
+
+I kernel sono in `src/main/resources/serverwithgpu/kernels.cl` e replicano la CPU operazione per
+operazione. Il selftest accetta differenze di arrotondamento float (heightmap < 1e-5, entità < 1e-4).
 
 ## Struttura
 
 ```
 src/main/java/com/serverwithgpu/
-├── ServerWithGpu.java            entrypoint, carica config e backend
+├── ServerWithGpu.java                 entrypoint
 ├── config/ServerWithGpuConfig.java
 ├── compute/
-│   ├── ComputeBackend.java       interfaccia: stesso input -> stesso output su CPU e GPU
-│   ├── CpuBackend.java           backend di riferimento (sempre disponibile)
-│   ├── Backends.java             sceglie il backend
-│   ├── HeightmapRequest.java     parametri di una richiesta
-│   └── PerlinNoise2D.java        Perlin 2D deterministico dal seme
+│   ├── ComputeBackend.java            interfaccia comune CPU/GPU
+│   ├── CpuBackend.java                riferimento CPU
+│   ├── OpenClBackend.java             backend GPU (JOCL)
+│   ├── ResilientBackend.java          GPU con fallback CPU su errore
+│   ├── Backends.java                  selezione backend
+│   ├── SelfTest.java                  confronto GPU/CPU
+│   ├── BlastGrid, EntityBatch, Explosions, HeightmapRequest, PerlinNoise2D
 ├── terrain/HeightmapBenchmark.java
 └── command/ServerWithGpuCommands.java
 ```
 
-## Cosa funziona oggi
+## Cosa manca (e perché)
 
-- Caricamento e salvataggio della configurazione.
-- Calcolo heightmap multi-ottava deterministico su CPU.
-- Comandi `status` e `benchmark`.
-
-## Cosa NON è ancora implementato
-
-- **Backend GPU** (OpenCL o Vulkan compute): `Backends.select` usa sempre la CPU e lo segnala nel log.
-- **Hook nella generazione del terreno, illuminazione, minerali, pathfinding, esplosioni,
-  fisica delle entità e random tick**: richiedono mixin o hook di Fabric API, e vanno aggiunti
-  uno alla volta, ciascuno dietro il proprio interruttore in config.
-
-## Nota sulla compatibilità con vanilla
-
-Alcune funzioni che hai descritto (esplosioni e random tick che sostituiscono la logica vanilla,
-generazione del terreno) cambiano il comportamento di gioco. Per questo ogni funzione deve:
-
-1. essere disattivata di default;
-2. produrre risultati identici alla versione CPU (altrimenti i mondi generati cambierebbero);
-3. avere un fallback CPU automatico se la GPU non è presente o fallisce.
+- **Hook vanilla** (illuminazione, minerali, pathfinding, esplosioni in gioco, random tick, fisica
+  entità): richiedono mixin sulle classi interne di 26.3 (es. `ServerLevel`, `LevelChunk`,
+  `Explosion`, `Mob`). Per scriverli correttamente servono i nomi reali delle classi/metodi, che si
+  ottengono dal sorgente decompilato generato da Loom.
+- **Illuminazione e pathfinding su GPU**: kernel da scrivere e validare con lo stesso schema
+  CPU/GPU; il pathfinding richiede un batching delle richieste per tick.
+- **Coerenza del mondo**: il terreno generato su GPU deve dare esattamente la stessa altezza
+  della CPU, altrimenti i chunk generati cambiano a seconda dell'hardware.

@@ -7,14 +7,21 @@ public final class Backends {
 	}
 
 	/**
-	 * Sceglie il backend migliore. Oggi l'unico backend disponibile è la CPU:
-	 * il backend GPU (OpenCL/Vulkan) va aggiunto come {@link ComputeBackend} separato
-	 * e restituito qui quando il driver è rilevato correttamente.
+	 * Sceglie il backend: GPU OpenCL se disponibile (con fallback CPU automatico),
+	 * altrimenti CPU. Qualsiasi errore di inizializzazione della GPU (anche UnsatisfiedLinkError)
+	 * viene registrato e non blocca l'avvio.
 	 */
 	public static ComputeBackend select(boolean preferGpu) {
-		if (preferGpu) {
-			ServerWithGpu.LOGGER.warn("GPU richiesta, ma nessun backend GPU è ancora implementato: uso la CPU.");
+		if (!preferGpu) {
+			return new CpuBackend();
 		}
-		return new CpuBackend();
+		try {
+			ComputeBackend gpu = OpenClBackend.create();
+			ServerWithGpu.LOGGER.info("GPU inizializzata: {}", gpu.name());
+			return new ResilientBackend(gpu, new CpuBackend());
+		} catch (Throwable t) {
+			ServerWithGpu.LOGGER.warn("GPU non disponibile, uso la CPU: {}", t.toString());
+			return new CpuBackend();
+		}
 	}
 }
