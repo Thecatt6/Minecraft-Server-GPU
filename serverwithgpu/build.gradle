@@ -25,10 +25,14 @@ dependencies {
 	include "org.jocl:jocl:${project.jocl_version}"
 }
 
+// Niente riferimenti a "project" dentro i closure: incompatibili con il configuration cache.
+def modVersion = project.version
+def modName = project.name
+
 processResources {
-	inputs.property "version", project.version
+	inputs.property "version", modVersion
 	filesMatching("fabric.mod.json") {
-		expand "version": project.version
+		expand "version": modVersion
 	}
 }
 
@@ -44,9 +48,9 @@ java {
 }
 
 jar {
-	inputs.property "projectName", project.name
+	inputs.property "projectName", modName
 	from("LICENSE") {
-		rename { "${it}_${project.name}" }
+		rename { "${it}_${modName}" }
 	}
 }
 
